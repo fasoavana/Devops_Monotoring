@@ -2,9 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_USER = 'faso01'
-        BACKEND_IMAGE = "faso01/blog-backend:latest"
-        FRONTEND_IMAGE = "faso01/blog-frontend:latest"
+        DOCKER_CREDS = credentials('docker-hub-creds')
     }
 
     stages {
@@ -17,23 +15,22 @@ pipeline {
         stage('Build & Push Images') {
             steps {
                 script {
-                    docker.withRegistry('', 'docker-hub-creds') {
-                        // Build et Push Backend
-                        def backend = docker.build("${env.BACKEND_IMAGE}", "./apps/backend")
-                        backend.push()
-                        
-                        // Build et Push Frontend
-                        def frontend = docker.build("${env.FRONTEND_IMAGE}", "./apps/frontend")
-                        frontend.push()
-                    }
+                    // Login
+                    sh "echo ${DOCKER_CREDS_PSW} | docker login -u ${DOCKER_CREDS_USR} --password-stdin"
+                    
+                    // Build & Push Backend
+                    sh "docker build -t faso01/blog-backend:latest apps/backend"
+                    sh "docker push faso01/blog-backend:latest"
+                    
+                    // Build & Push Frontend
+                    sh "docker build -t faso01/blog-frontend:latest apps/frontend"
+                    sh "docker push faso01/blog-frontend:latest"
                 }
             }
         }
 
         stage('Deploy with Ansible') {
             steps {
-                // On lance Ansible directement depuis le node Jenkins
-                // Note : Jenkins doit avoir accès au binaire 'ansible-playbook'
                 sh "ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_dind.yml"
             }
         }
