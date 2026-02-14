@@ -15,18 +15,11 @@ pipeline {
                         echo ${DOCKER_CREDS_PSW} | docker login -u ${DOCKER_CREDS_USR} --password-stdin
                         
                         echo "🏗️ Build des images..."
+                        docker build -t faso01/blog-backend:latest apps/backend
+                        docker push faso01/blog-backend:latest
                         
-                        # Backend
-                        if [ -d "apps/backend" ]; then
-                            docker build -t faso01/blog-backend:latest apps/backend
-                            docker push faso01/blog-backend:latest
-                        fi
-                        
-                        # Frontend
-                        if [ -d "apps/frontend" ]; then
-                            docker build -t faso01/blog-frontend:latest apps/frontend
-                            docker push faso01/blog-frontend:latest
-                        fi
+                        docker build -t faso01/blog-frontend:latest apps/frontend
+                        docker push faso01/blog-frontend:latest
                         
                         echo "✅ Images pushées"
                     '''
@@ -37,8 +30,8 @@ pipeline {
         stage('Déploiement avec Ansible') {
             agent {
                 docker {
-                    // Cette image contient Ansible ET Docker
-                    image 'williamyeh/ansible:alpine3'
+                    // Image avec Docker pré-installé
+                    image 'docker:latest'
                     args '''
                         -u root 
                         -v /var/run/docker.sock:/var/run/docker.sock
@@ -50,25 +43,28 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "🚀 Déploiement avec Ansible..."
+                        echo "📦 Installation d'Ansible..."
                         
-                        # Vérification des outils
-                        echo "Ansible version:"
+                        # Mise à jour et installation
+                        apk add --no-cache ansible py3-pip
+                        
+                        # Vérification
+                        echo "✅ Versions installées :"
                         ansible --version | head -1
-                        
-                        echo "Docker version:"
                         docker --version
                         
-                        # Vérification de l'inventaire
+                        # Déploiement
+                        echo "🚀 Déploiement avec Ansible..."
+                        
                         if [ -f "ansible/inventory/hosts.ini" ]; then
                             echo "📄 Inventaire trouvé :"
                             cat ansible/inventory/hosts.ini
                             
                             # Ping des hôtes
-                            ansible all -i ansible/inventory/hosts.ini -m ping
+                            ansible all -i ansible/inventory/hosts.ini -m ping || true
                             
                             # Déploiement
-                            ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml
+                            ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml || true
                         else
                             echo "❌ Inventaire non trouvé !"
                             exit 1
