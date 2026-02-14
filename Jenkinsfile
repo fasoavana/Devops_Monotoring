@@ -14,10 +14,14 @@ pipeline {
             }
         }
 
-        stage('Install Tools') {
+     stage('Install Tools') {
             steps {
-                // On installe Ansible pour le déploiement
-                sh "apt-get update && apt-get install -y ansible"
+                // On utilise -u 0 (root) via une commande shell si possible, 
+                // mais le plus simple est de forcer l'installation sans sudo si l'image le permet
+                // ou de s'assurer que l'agent a les droits.
+                script {
+                    sh "apt-get update && apt-get install -y ansible"
+                }
             }
         }
 
