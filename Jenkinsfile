@@ -54,13 +54,19 @@ pipeline {
                         # Créer le dossier playbooks s'il n'existe pas
                         mkdir -p ansible/playbooks
                         
-                        # Créer le playbook avec échappement des doubles accolades
+                        # Version améliorée du playbook avec gestion des conteneurs existants
                         cat > ansible/playbooks/deploy_blog.yml << 'EOF'
 ---
 - name: Déployer l'application blog
   hosts: all
   connection: docker
   tasks:
+    - name: Supprimer les anciens conteneurs s'ils existent
+      shell: |
+        docker rm -f blog-backend || true
+        docker rm -f blog-frontend || true
+      ignore_errors: yes
+    
     - name: Vérifier que l'image backend existe
       shell: |
         docker images faso01/blog-backend:latest --format 'table {% raw %}{{.Repository}}{% endraw %}'
@@ -118,12 +124,13 @@ EOF
                     sh '''
                         echo "📊 Installation de docker-compose..."
                         
-                        # Installation de docker-compose pour Alpine
-                        apk add --no-cache docker-compose 2>/dev/null || {
-                            echo "Installation manuelle de docker-compose..."
+                        # Installation de docker-compose avec les bonnes permissions
+                        if ! command -v docker-compose &> /dev/null; then
+                            echo "Téléchargement de docker-compose..."
                             curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
                             chmod +x /usr/local/bin/docker-compose
-                        }
+                            echo "✅ docker-compose installé"
+                        fi
                         
                         docker-compose --version
                         
@@ -263,7 +270,7 @@ EOF
             }
         }
         success {
-            echo "🎉 SUCCÈS COMPLET ! Tous les services sont déployés sans conflit de ports :"
+            echo "🎉 SUCCÈS COMPLET ! Tous les services sont déployés :"
             echo "   ⚙️ Backend API:   http://localhost:8000"
             echo "   📱 Frontend:       http://localhost:3000"
             echo "   📊 Prometheus:     http://localhost:9090"
