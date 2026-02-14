@@ -4,6 +4,8 @@ pipeline {
     environment {
         DOCKER_CREDS = credentials('docker-hub-creds')
         ANSIBLE_HOST_KEY_CHECKING = "False"
+        // Ajout pour éviter les problèmes de tmp
+        ANSIBLE_REMOTE_TMP = "/tmp/ansible-${BUILD_TAG}"
     }
 
     stages {
@@ -22,6 +24,42 @@ pipeline {
                         docker push faso01/blog-frontend:latest
                         
                         echo "✅ Images pushées avec succès"
+                    '''
+                }
+            }
+        }
+
+        stage('Vérification conteneur DIND') {
+            steps {
+                script {
+                    sh '''
+                        echo "🔍 Vérification du conteneur Docker-in-Docker..."
+                        
+                        # Vérifier si le conteneur existe et est en cours d'exécution
+                        if ! docker ps --format '{{.Names}}' | grep -q "blog-server-simule"; then
+                            echo "❌ Conteneur blog-server-simule non trouvé !"
+                            echo "Création du conteneur Docker-in-Docker..."
+                            
+                            # Supprimer l'ancien s'il existe mais est arrêté
+                            docker rm -f blog-server-simule 2>/dev/null || true
+                            
+                            # Créer un nouveau conteneur DIND
+                            docker run -d \
+                                --privileged \
+                                --name blog-server-simule \
+                                -p 2375:2375 \
+                                docker:dind
+                            
+                            echo "✅ Conteneur blog-server-simule créé"
+                            
+                            # Attendre que Docker démarre dans le conteneur
+                            echo "Attente du démarrage de Docker dans le conteneur..."
+                            sleep 10
+                        else
+                            echo "✅ Conteneur blog-server-simule trouvé"
+                        fi
+                        
+                        docker ps | grep blog-server-simule
                     '''
                 }
             }
@@ -54,13 +92,20 @@ pipeline {
                         # Créer le dossier playbooks s'il n'existe pas
                         mkdir -p ansible/playbooks
                         
-                        # Version améliorée du playbook avec gestion des conteneurs existants
+                        # Version améliorée du playbook
                         cat > ansible/playbooks/deploy_blog.yml << 'EOF'
 ---
 - name: Déployer l'application blog
   hosts: all
   connection: docker
+  vars:
+    ansible_remote_tmp: /tmp/ansible-${BUILD_TAG}
   tasks:
+    - name: Créer le répertoire tmp avec les bons droits
+      shell: |
+        mkdir -p /tmp/ansible && chmod 777 /tmp/ansible
+      ignore_errors: yes
+    
     - name: Supprimer les anciens conteneurs s'ils existent
       shell: |
         docker rm -f blog-backend || true
@@ -124,32 +169,27 @@ EOF
                     sh '''
                         echo "📊 Installation de docker-compose..."
                         
-                        # Télécharger docker-compose dans /tmp (pas besoin de permissions root)
-                        if ! command -v docker-compose &> /dev/null; then
+                        # Télécharger docker-compose
+                        if ! command -v docker-compose &> /dev/null && [ ! -f "/tmp/docker-compose" ]; then
                             echo "Téléchargement de docker-compose..."
                             curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /tmp/docker-compose
                             chmod +x /tmp/docker-compose
-                            alias docker-compose='/tmp/docker-compose'
-                            echo "✅ docker-compose installé dans /tmp"
                         fi
                         
-                        /tmp/docker-compose --version || docker-compose --version
+                        DOCKER_COMPOSE_CMD="docker-compose"
+                        [ -f "/tmp/docker-compose" ] && DOCKER_COMPOSE_CMD="/tmp/docker-compose"
                         
                         echo "📊 Configuration du monitoring..."
                         
-                        if [ -f "docker-compose-monitoring.yml" ]; then
-                            echo "Fichier monitoring existant trouvé"
-                        else
-                            echo "❌ docker-compose-monitoring.yml non trouvé"
-                            echo "Création d'un fichier de monitoring par défaut..."
-                            
+                        # Créer les fichiers de monitoring si nécessaire
+                        if [ ! -f "docker-compose-monitoring.yml" ]; then
                             cat > docker-compose-monitoring.yml << 'EOF'
 version: '3.8'
 
 services:
   prometheus:
     image: prom/prometheus:latest
-    container_name: prometheus
+    container_name: monitoring-prometheus
     ports:
       - "9090:9090"
     volumes:
@@ -158,7 +198,7 @@ services:
 
   grafana:
     image: grafana/grafana:latest
-    container_name: grafana
+    container_name: monitoring-grafana
     ports:
       - "3030:3000"
     environment:
@@ -180,33 +220,21 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9100']
 EOF
-                            echo "✅ Fichiers de monitoring créés"
                         fi
                         
                         echo "🚀 Démarrage des services monitoring..."
+                        $DOCKER_COMPOSE_CMD -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
+                        $DOCKER_COMPOSE_CMD -f docker-compose-monitoring.yml up -d
                         
-                        # Utiliser docker-compose depuis /tmp
-                        if [ -f "/tmp/docker-compose" ]; then
-                            /tmp/docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
-                            /tmp/docker-compose -f docker-compose-monitoring.yml up -d
-                            echo "✅ Conteneurs monitoring :"
-                            /tmp/docker-compose -f docker-compose-monitoring.yml ps
-                        else
-                            docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
-                            docker-compose -f docker-compose-monitoring.yml up -d
-                            echo "✅ Conteneurs monitoring :"
-                            docker-compose -f docker-compose-monitoring.yml ps
-                        fi
+                        echo "✅ Conteneurs monitoring :"
+                        $DOCKER_COMPOSE_CMD -f docker-compose-monitoring.yml ps
                         
-                        # Attente du démarrage
-                        echo "Attente du démarrage des services..."
                         sleep 10
                         
-                        # Vérification des endpoints
                         echo ""
-                        echo "📊 Vérification des endpoints monitoring :"
-                        curl -s -f http://localhost:9090 > /dev/null && echo "✅ Prometheus OK (port 9090)" || echo "⚠️ Prometheus non accessible"
-                        curl -s -f http://localhost:3030 > /dev/null && echo "✅ Grafana OK (port 3030)" || echo "⚠️ Grafana non accessible"
+                        echo "📊 Vérification des endpoints :"
+                        curl -s -f http://localhost:9090 > /dev/null && echo "✅ Prometheus OK (9090)" || echo "⚠️ Prometheus non accessible"
+                        curl -s -f http://localhost:3030 > /dev/null && echo "✅ Grafana OK (3030)" || echo "⚠️ Grafana non accessible"
                     '''
                 }
             }
@@ -216,52 +244,21 @@ EOF
             steps {
                 script {
                     sh '''
-                        echo "🔍 Vérification finale des déploiements..."
+                        echo "🔍 Vérification finale..."
                         echo ""
                         
-                        echo "📋 Conteneurs en cours d'exécution :"
+                        echo "📋 Tous les conteneurs :"
                         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
                         
                         echo ""
-                        echo "🌐 Endpoints disponibles :"
-                        echo "   ⚙️ Backend API:   http://localhost:8000"
-                        echo "   📱 Frontend:       http://localhost:3000"
-                        echo "   📊 Prometheus:     http://localhost:9090"
-                        echo "   📈 Grafana:        http://localhost:3030 (admin/admin)"
+                        echo "🌐 Endpoints :"
+                        echo "   Backend:  http://localhost:8000"
+                        echo "   Frontend: http://localhost:3000"
+                        echo "   Prometheus: http://localhost:9090"
+                        echo "   Grafana: http://localhost:3030 (admin/admin)"
                         
                         echo ""
-                        echo "🔄 Tests des endpoints :"
-                        
-                        # Test backend
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 | grep -q "200"; then
-                            echo "✅ Backend (8000): accessible"
-                        else
-                            echo "⚠️ Backend (8000): non accessible"
-                        fi
-                        
-                        # Test frontend
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 | grep -q "200"; then
-                            echo "✅ Frontend (3000): accessible"
-                        else
-                            echo "⚠️ Frontend (3000): non accessible"
-                        fi
-                        
-                        # Test Prometheus
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:9090 | grep -q "200"; then
-                            echo "✅ Prometheus (9090): accessible"
-                        else
-                            echo "⚠️ Prometheus (9090): non accessible"
-                        fi
-                        
-                        # Test Grafana
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3030 | grep -q "200"; then
-                            echo "✅ Grafana (3030): accessible"
-                        else
-                            echo "⚠️ Grafana (3030): non accessible"
-                        fi
-                        
-                        echo ""
-                        echo "🎉 Déploiement terminé avec succès !"
+                        echo "🎉 Déploiement terminé !"
                     '''
                 }
             }
@@ -270,23 +267,8 @@ EOF
 
     post {
         always {
-            script {
-                sh '''
-                    echo "🧹 Nettoyage..."
-                    docker logout 2>/dev/null || true
-                '''
-                echo "✅ Pipeline terminé"
-            }
-        }
-        success {
-            echo "🎉 SUCCÈS COMPLET ! Tous les services sont déployés :"
-            echo "   ⚙️ Backend API:   http://localhost:8000"
-            echo "   📱 Frontend:       http://localhost:3000"
-            echo "   📊 Prometheus:     http://localhost:9090"
-            echo "   📈 Grafana:        http://localhost:3030 (admin/admin)"
-        }
-        failure {
-            echo "❌ ÉCHEC ! Vérifiez les logs ci-dessus pour plus de détails."
+            sh 'docker logout 2>/dev/null || true'
+            echo "✅ Pipeline terminé"
         }
     }
 }
