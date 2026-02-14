@@ -1,8 +1,10 @@
 pipeline {
-    agent any
+    agent any 
+    
     environment {
         DOCKER_CREDS = credentials('docker-hub-creds')
     }
+
     stages {
         stage('Build & Push Blog') {
             steps {
@@ -14,28 +16,20 @@ pipeline {
             }
         }
 
-     stage('Install Tools') {
-            steps {
-                // On utilise -u 0 (root) via une commande shell si possible, 
-                // mais le plus simple est de forcer l'installation sans sudo si l'image le permet
-                // ou de s'assurer que l'agent a les droits.
-                script {
-                    sh "apt-get update && apt-get install -y ansible"
-                }
-            }
-        }
-
         stage('Deploy App with Ansible') {
+            agent {
+                // On utilise une image qui a déjà Ansible installé !
+                docker { image 'chilio/ansible:latest' } 
+            }
             steps {
-                // Déploiement du Backend/Frontend sur le serveur simulé
+                // Ici, plus besoin d'apt-get install, ansible-playbook est déjà là
                 sh "ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml"
             }
         }
 
         stage('Launch Monitoring Stack') {
             steps {
-                echo 'Lancement de Prometheus et Grafana...'
-                // Utilisation du fichier compose présent à la racine de ton repo
+                // Retour sur l'agent principal pour lancer le compose
                 sh "docker-compose -f docker-compose-monitoring.yml up -d"
             }
         }
