@@ -21,7 +21,7 @@ pipeline {
                         docker build -t faso01/blog-frontend:latest apps/frontend
                         docker push faso01/blog-frontend:latest
                         
-                        echo "✅ Images pushées"
+                        echo "✅ Images pushées avec succès"
                     '''
                 }
             }
@@ -45,7 +45,7 @@ pipeline {
                         echo "📦 Installation d'Ansible..."
                         apk add --no-cache ansible py3-pip
                         
-                        echo "✅ Versions :"
+                        echo "✅ Versions installées :"
                         ansible --version | head -1
                         docker --version
                         
@@ -102,10 +102,10 @@ pipeline {
         var: docker_ps.stdout_lines
 EOF
                         
-                        echo "📄 Inventaire :"
+                        echo "📄 Inventaire Ansible :"
                         cat ansible/inventory/hosts.ini
                         
-                        echo "🚀 Exécution du playbook..."
+                        echo "🚀 Exécution du playbook de déploiement..."
                         ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml -v
                     '''
                 }
@@ -118,16 +118,19 @@ EOF
                     sh '''
                         echo "📊 Installation de docker-compose..."
                         
-                        # Installation de docker-compose
-                        apk add --no-cache docker-compose
+                        # Installation de docker-compose pour Alpine
+                        apk add --no-cache docker-compose 2>/dev/null || {
+                            echo "Installation manuelle de docker-compose..."
+                            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+                            chmod +x /usr/local/bin/docker-compose
+                        }
                         
-                        echo "📊 Monitoring..."
+                        docker-compose --version
+                        
+                        echo "📊 Configuration du monitoring..."
                         
                         if [ -f "docker-compose-monitoring.yml" ]; then
-                            docker-compose -f docker-compose-monitoring.yml down --remove-orphans || true
-                            docker-compose -f docker-compose-monitoring.yml up -d
-                            echo "✅ Conteneurs monitoring :"
-                            docker-compose -f docker-compose-monitoring.yml ps
+                            echo "Fichier monitoring existant trouvé"
                         else
                             echo "❌ docker-compose-monitoring.yml non trouvé"
                             echo "Création d'un fichier de monitoring par défaut..."
@@ -140,7 +143,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     ports:
-      - "9090:9090"
+      - "9090:9090"  # Prometheus reste sur 9090
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     restart: unless-stopped
@@ -149,7 +152,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3030:3000"  # CHANGÉ: Grafana passe sur 3030 pour éviter conflit avec frontend (3000)
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     restart: unless-stopped
@@ -169,15 +172,25 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9100']
 EOF
-                            
-                            docker-compose -f docker-compose-monitoring.yml up -d
-                            echo "✅ Monitoring créé et démarré !"
+                            echo "✅ Fichiers de monitoring créés"
                         fi
                         
-                        # Vérification
-                        sleep 5
-                        curl -s -f http://localhost:9090 > /dev/null && echo "✅ Prometheus OK" || echo "⚠️ Prometheus non accessible"
-                        curl -s -f http://localhost:3000 > /dev/null && echo "✅ Grafana OK" || echo "⚠️ Grafana non accessible"
+                        echo "🚀 Démarrage des services monitoring..."
+                        docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
+                        docker-compose -f docker-compose-monitoring.yml up -d
+                        
+                        echo "✅ Conteneurs monitoring :"
+                        docker-compose -f docker-compose-monitoring.yml ps
+                        
+                        # Attente du démarrage
+                        echo "Attente du démarrage des services..."
+                        sleep 10
+                        
+                        # Vérification des endpoints
+                        echo ""
+                        echo "📊 Vérification des endpoints monitoring :"
+                        curl -s -f http://localhost:9090 > /dev/null && echo "✅ Prometheus OK (port 9090)" || echo "⚠️ Prometheus non accessible"
+                        curl -s -f http://localhost:3030 > /dev/null && echo "✅ Grafana OK (port 3030)" || echo "⚠️ Grafana non accessible"
                     '''
                 }
             }
@@ -187,21 +200,52 @@ EOF
             steps {
                 script {
                     sh '''
-                        echo "🔍 Vérification des déploiements..."
+                        echo "🔍 Vérification finale des déploiements..."
+                        echo ""
                         
-                        echo "Conteneurs en cours d'exécution :"
+                        echo "📋 Conteneurs en cours d'exécution :"
                         docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
                         
                         echo ""
-                        echo "📊 Monitoring :"
-                        echo "- Prometheus: http://localhost:9090"
-                        echo "- Grafana: http://localhost:3000 (admin/admin)"
+                        echo "🌐 Endpoints disponibles :"
+                        echo "   ⚙️ Backend API:   http://localhost:8000"
+                        echo "   📱 Frontend:       http://localhost:3000"
+                        echo "   📊 Prometheus:     http://localhost:9090"
+                        echo "   📈 Grafana:        http://localhost:3030 (admin/admin)"
                         
-                        # Test des endpoints
                         echo ""
-                        echo "Tests des endpoints :"
-                        curl -s -o /dev/null -w "Backend: %{http_code}\n" http://localhost:8000 || echo "Backend: non accessible"
-                        curl -s -o /dev/null -w "Frontend: %{http_code}\n" http://localhost:3000 || echo "Frontend: non accessible"
+                        echo "🔄 Tests des endpoints :"
+                        
+                        # Test backend
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 | grep -q "200\|404\|500"; then
+                            echo "✅ Backend (8000): accessible"
+                        else
+                            echo "⚠️ Backend (8000): non accessible"
+                        fi
+                        
+                        # Test frontend
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 | grep -q "200\|404"; then
+                            echo "✅ Frontend (3000): accessible"
+                        else
+                            echo "⚠️ Frontend (3000): non accessible"
+                        fi
+                        
+                        # Test Prometheus
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:9090 | grep -q "200"; then
+                            echo "✅ Prometheus (9090): accessible"
+                        else
+                            echo "⚠️ Prometheus (9090): non accessible"
+                        fi
+                        
+                        # Test Grafana
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3030 | grep -q "200"; then
+                            echo "✅ Grafana (3030): accessible"
+                        else
+                            echo "⚠️ Grafana (3030): non accessible"
+                        fi
+                        
+                        echo ""
+                        echo "🎉 Déploiement terminé avec succès !"
                     '''
                 }
             }
@@ -210,18 +254,23 @@ EOF
 
     post {
         always {
-            sh 'docker logout || true'
-            echo "✅ Pipeline terminé"
+            script {
+                sh '''
+                    echo "🧹 Nettoyage..."
+                    docker logout 2>/dev/null || true
+                '''
+                echo "✅ Pipeline terminé"
+            }
         }
         success {
-            echo "🎉 SUCCÈS ! Tous les services sont déployés !"
-            echo "   - Frontend: http://localhost:3000"
-            echo "   - Backend: http://localhost:8000"
-            echo "   - Prometheus: http://localhost:9090"
-            echo "   - Grafana: http://localhost:3000 (admin/admin)"
+            echo "🎉 SUCCÈS COMPLET ! Tous les services sont déployés sans conflit de ports :"
+            echo "   ⚙️ Backend API:   http://localhost:8000"
+            echo "   📱 Frontend:       http://localhost:3000"
+            echo "   📊 Prometheus:     http://localhost:9090"
+            echo "   📈 Grafana:        http://localhost:3030 (admin/admin)"
         }
         failure {
-            echo "❌ ÉCHEC ! Vérifiez les logs."
+            echo "❌ ÉCHEC ! Vérifiez les logs ci-dessus pour plus de détails."
         }
     }
 }
