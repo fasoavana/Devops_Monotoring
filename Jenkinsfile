@@ -3,7 +3,6 @@ pipeline {
 
     environment {
         DOCKER_CREDS = credentials('docker-hub-creds')
-        // Évite les prompts SSH pour Ansible
         ANSIBLE_HOST_KEY_CHECKING = "False"
     }
 
@@ -17,25 +16,19 @@ pipeline {
                         
                         echo "🏗️ Build des images..."
                         
-                        # Vérification et build backend
+                        # Backend
                         if [ -d "apps/backend" ]; then
-                            echo "Build backend..."
                             docker build -t faso01/blog-backend:latest apps/backend
                             docker push faso01/blog-backend:latest
-                        else
-                            error "Dossier apps/backend non trouvé !"
                         fi
                         
-                        # Vérification et build frontend
+                        # Frontend
                         if [ -d "apps/frontend" ]; then
-                            echo "Build frontend..."
                             docker build -t faso01/blog-frontend:latest apps/frontend
                             docker push faso01/blog-frontend:latest
-                        else
-                            error "Dossier apps/frontend non trouvé !"
                         fi
                         
-                        echo "✅ Images buildées et pushées avec succès"
+                        echo "✅ Images pushées"
                     '''
                 }
             }
@@ -44,7 +37,8 @@ pipeline {
         stage('Déploiement avec Ansible') {
             agent {
                 docker {
-                    image 'cytopia/ansible:latest-tools'
+                    // Cette image contient Ansible ET Docker
+                    image 'williamyeh/ansible:alpine3'
                     args '''
                         -u root 
                         -v /var/run/docker.sock:/var/run/docker.sock
@@ -58,28 +52,27 @@ pipeline {
                     sh '''
                         echo "🚀 Déploiement avec Ansible..."
                         
+                        # Vérification des outils
+                        echo "Ansible version:"
+                        ansible --version | head -1
+                        
+                        echo "Docker version:"
+                        docker --version
+                        
                         # Vérification de l'inventaire
-                        if [ ! -f "ansible/inventory/hosts.ini" ]; then
+                        if [ -f "ansible/inventory/hosts.ini" ]; then
+                            echo "📄 Inventaire trouvé :"
+                            cat ansible/inventory/hosts.ini
+                            
+                            # Ping des hôtes
+                            ansible all -i ansible/inventory/hosts.ini -m ping
+                            
+                            # Déploiement
+                            ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml
+                        else
                             echo "❌ Inventaire non trouvé !"
-                            echo "Contenu du dossier ansible :"
-                            ls -la ansible/
                             exit 1
                         fi
-                        
-                        # Test de connexion aux hôtes
-                        echo "Test de connexion aux hôtes..."
-                        ansible all -i ansible/inventory/hosts.ini -m ping
-                        
-                        # Vérification du playbook
-                        if [ ! -f "ansible/playbooks/deploy_blog.yml" ]; then
-                            echo "❌ Playbook non trouvé !"
-                            exit 1
-                        fi
-                        
-                        # Déploiement avec variables Docker
-                        echo "Lancement du playbook de déploiement..."
-                        ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml \
-                            --extra-vars "docker_user=${DOCKER_CREDS_USR} docker_pass=${DOCKER_CREDS_PSW}"
                     '''
                 }
             }
@@ -89,32 +82,15 @@ pipeline {
             steps {
                 script {
                     sh '''
-                        echo "📊 Configuration du monitoring..."
+                        echo "📊 Monitoring..."
                         
-                        # Vérification du fichier docker-compose
-                        if [ ! -f "docker-compose-monitoring.yml" ]; then
-                            echo "❌ Fichier docker-compose-monitoring.yml non trouvé !"
-                            exit 1
+                        if [ -f "docker-compose-monitoring.yml" ]; then
+                            docker-compose -f docker-compose-monitoring.yml down --remove-orphans || true
+                            docker-compose -f docker-compose-monitoring.yml up -d
+                            docker-compose -f docker-compose-monitoring.yml ps
+                        else
+                            echo "❌ docker-compose-monitoring.yml non trouvé"
                         fi
-                        
-                        # Arrêt des anciens conteneurs (si existants)
-                        docker-compose -f docker-compose-monitoring.yml down --remove-orphans || true
-                        
-                        # Démarrage du monitoring
-                        docker-compose -f docker-compose-monitoring.yml up -d
-                        
-                        # Attente du démarrage
-                        echo "Attente du démarrage des services..."
-                        sleep 10
-                        
-                        # Vérification des services
-                        echo "✅ Services monitoring :"
-                        docker-compose -f docker-compose-monitoring.yml ps
-                        
-                        # Test des endpoints
-                        echo "Test des endpoints :"
-                        curl -s -f http://localhost:9090 > /dev/null && echo "✅ Prometheus OK" || echo "⚠️ Prometheus non accessible"
-                        curl -s -f http://localhost:3000 > /dev/null && echo "✅ Grafana OK" || echo "⚠️ Grafana non accessible"
                     '''
                 }
             }
@@ -123,23 +99,11 @@ pipeline {
 
     post {
         always {
-            script {
-                sh '''
-                    echo "🧹 Nettoyage..."
-                    docker logout 2>/dev/null || true
-                '''
-            }
+            sh 'docker logout || true'
             echo "✅ Pipeline terminé"
         }
-        success {
-            echo "🎉 SUCCÈS ! L'application est déployée !"
-            echo "   - Frontend: http://localhost:3000"
-            echo "   - Backend: http://localhost:8000"
-            echo "   - Prometheus: http://localhost:9090"
-            echo "   - Grafana: http://localhost:3000 (admin/admin)"
-        }
         failure {
-            echo "❌ ÉCHEC ! Vérifiez les logs ci-dessus."
+            echo "❌ ÉCHEC ! Vérifiez les logs."
         }
     }
 }
