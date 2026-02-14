@@ -124,15 +124,16 @@ EOF
                     sh '''
                         echo "📊 Installation de docker-compose..."
                         
-                        # Installation de docker-compose avec les bonnes permissions
+                        # Télécharger docker-compose dans /tmp (pas besoin de permissions root)
                         if ! command -v docker-compose &> /dev/null; then
                             echo "Téléchargement de docker-compose..."
-                            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-                            chmod +x /usr/local/bin/docker-compose
-                            echo "✅ docker-compose installé"
+                            curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /tmp/docker-compose
+                            chmod +x /tmp/docker-compose
+                            alias docker-compose='/tmp/docker-compose'
+                            echo "✅ docker-compose installé dans /tmp"
                         fi
                         
-                        docker-compose --version
+                        /tmp/docker-compose --version || docker-compose --version
                         
                         echo "📊 Configuration du monitoring..."
                         
@@ -183,11 +184,19 @@ EOF
                         fi
                         
                         echo "🚀 Démarrage des services monitoring..."
-                        docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
-                        docker-compose -f docker-compose-monitoring.yml up -d
                         
-                        echo "✅ Conteneurs monitoring :"
-                        docker-compose -f docker-compose-monitoring.yml ps
+                        # Utiliser docker-compose depuis /tmp
+                        if [ -f "/tmp/docker-compose" ]; then
+                            /tmp/docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
+                            /tmp/docker-compose -f docker-compose-monitoring.yml up -d
+                            echo "✅ Conteneurs monitoring :"
+                            /tmp/docker-compose -f docker-compose-monitoring.yml ps
+                        else
+                            docker-compose -f docker-compose-monitoring.yml down --remove-orphans 2>/dev/null || true
+                            docker-compose -f docker-compose-monitoring.yml up -d
+                            echo "✅ Conteneurs monitoring :"
+                            docker-compose -f docker-compose-monitoring.yml ps
+                        fi
                         
                         # Attente du démarrage
                         echo "Attente du démarrage des services..."
