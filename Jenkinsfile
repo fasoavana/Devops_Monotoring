@@ -143,7 +143,7 @@ services:
     image: prom/prometheus:latest
     container_name: prometheus
     ports:
-      - "9090:9090"  # Prometheus reste sur 9090
+      - "9090:9090"
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     restart: unless-stopped
@@ -152,7 +152,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3030:3000"  # CHANGÉ: Grafana passe sur 3030 pour éviter conflit avec frontend (3000)
+      - "3030:3000"
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
     restart: unless-stopped
@@ -217,14 +217,14 @@ EOF
                         echo "🔄 Tests des endpoints :"
                         
                         # Test backend
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 | grep -q "200\|404\|500"; then
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:8000 | grep -q "200"; then
                             echo "✅ Backend (8000): accessible"
                         else
                             echo "⚠️ Backend (8000): non accessible"
                         fi
                         
                         # Test frontend
-                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 | grep -q "200\|404"; then
+                        if curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 | grep -q "200"; then
                             echo "✅ Frontend (3000): accessible"
                         else
                             echo "⚠️ Frontend (3000): non accessible"
