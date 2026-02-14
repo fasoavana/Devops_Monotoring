@@ -1,6 +1,12 @@
 pipeline {
-    agent any 
-    
+    // On définit l'agent Docker au niveau global pour tout le pipeline
+    agent {
+        docker {
+            image 'appleboy/drone-ansible:latest' // Cette image contient Ansible et Docker CLI
+            args '-u root -v /var/run/docker.sock:/var/run/docker.sock' 
+        }
+    }
+
     environment {
         DOCKER_CREDS = credentials('docker-hub-creds')
     }
@@ -17,19 +23,15 @@ pipeline {
         }
 
         stage('Deploy App with Ansible') {
-            agent {
-                // On utilise une image qui a déjà Ansible installé !
-                docker { image 'chilio/ansible:latest' } 
-            }
             steps {
-                // Ici, plus besoin d'apt-get install, ansible-playbook est déjà là
+                // Ansible est déjà installé dans l'image de l'agent
                 sh "ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml"
             }
         }
 
         stage('Launch Monitoring Stack') {
             steps {
-                // Retour sur l'agent principal pour lancer le compose
+                // Docker-compose est aussi disponible ou simulable via docker
                 sh "docker-compose -f docker-compose-monitoring.yml up -d"
             }
         }
