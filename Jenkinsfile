@@ -49,34 +49,26 @@ pipeline {
                         ansible --version | head -1
                         docker --version
                         
-                        echo "🚀 PRÉPARATION DU CONTENEUR DIND..."
-                        
-                        # Installer Python dans le conteneur DIND
-                        docker exec blog-server-simule sh -c "
-                            apk add --no-cache python3 && \
-                            ln -sf /usr/bin/python3 /usr/bin/python
-                        " || echo "Python déjà installé"
+                        echo "🚀 Préparation du conteneur DIND..."
+                        docker exec blog-server-simule apk add --no-cache python3 2>/dev/null || true
                         
                         echo "🚀 Création du playbook Ansible..."
-                        
-                        # Créer le dossier playbooks s'il n'existe pas
                         mkdir -p ansible/playbooks
                         
-                        # Version SIMPLIFIÉE - commandes shell directes
                         cat > ansible/playbooks/deploy_blog.yml << 'EOF'
 ---
 - name: Déployer l'application blog
   hosts: all
   connection: docker
-  gather_facts: no  # Désactive la collecte de faits qui nécessite Python
+  gather_facts: no
   
   tasks:
-    - name: Supprimer les anciens conteneurs s'ils existent
+    - name: Supprimer les anciens conteneurs
       shell: |
         docker rm -f blog-backend 2>/dev/null || true
         docker rm -f blog-frontend 2>/dev/null || true
     
-    - name: Lancer le conteneur backend
+    - name: Lancer le backend
       shell: |
         docker run -d \
           --name blog-backend \
@@ -84,7 +76,7 @@ pipeline {
           --restart unless-stopped \
           faso01/blog-backend:latest
     
-    - name: Lancer le conteneur frontend
+    - name: Lancer le frontend
       shell: |
         docker run -d \
           --name blog-frontend \
@@ -101,10 +93,10 @@ pipeline {
         var: docker_ps.stdout_lines
 EOF
                         
-                        echo "📄 Inventaire Ansible :"
+                        echo "📄 Inventaire :"
                         cat ansible/inventory/hosts.ini
                         
-                        echo "🚀 Exécution du playbook de déploiement..."
+                        echo "🚀 Exécution du playbook..."
                         ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml -v
                     '''
                 }
@@ -117,9 +109,7 @@ EOF
                     sh '''
                         echo "📊 Installation de docker-compose..."
                         
-                        # Installation simple de docker-compose
                         if ! command -v docker-compose &> /dev/null; then
-                            echo "Téléchargement de docker-compose..."
                             curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /tmp/docker-compose
                             chmod +x /tmp/docker-compose
                         fi
@@ -127,38 +117,13 @@ EOF
                         DOCKER_COMPOSE_CMD="docker-compose"
                         [ -f "/tmp/docker-compose" ] && DOCKER_COMPOSE_CMD="/tmp/docker-compose"
                         
-                        echo "📊 FORCER LE REDÉMARRAGE DU MONITORING..."
+                        echo "📊 Configuration monitoring..."
                         
-                        # Supprimer les anciens conteneurs
-                        docker rm -f monitoring-prometheus monitoring-grafana 2>/dev/null || true
+                        # Créer le dossier et le fichier avec les bonnes permissions
+                        mkdir -p monitoring/prometheus
                         
-                        # Créer les fichiers de monitoring si nécessaire
-                        if [ ! -f "docker-compose-monitoring.yml" ]; then
-                            cat > docker-compose-monitoring.yml << 'EOF'
-version: '3.8'
-
-services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: monitoring-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    container_name: monitoring-grafana
-    ports:
-      - "3030:3000"
-    environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-    restart: unless-stopped
-EOF
-                            
-                            mkdir -p monitoring/prometheus
-                            cat > monitoring/prometheus/prometheus.yml << 'EOF'
+                        # Créer le fichier de config prometheus
+                        cat > monitoring/prometheus/prometheus.yml << 'EOF'
 global:
   scrape_interval: 15s
 
@@ -167,10 +132,28 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 EOF
-                        fi
                         
-                        echo "🚀 Démarrage du monitoring..."
-                        $DOCKER_COMPOSE_CMD -f docker-compose-monitoring.yml up -d
+                        # Vérifier que le fichier existe
+                        ls -la monitoring/prometheus/prometheus.yml
+                        
+                        # Supprimer les anciens conteneurs
+                        docker rm -f monitoring-prometheus monitoring-grafana 2>/dev/null || true
+                        
+                        # Version SIMPLIFIÉE sans volume mounting problématique
+                        echo "🚀 Démarrage Prometheus sans volume..."
+                        docker run -d \
+                          --name monitoring-prometheus \
+                          -p 9090:9090 \
+                          --restart unless-stopped \
+                          prom/prometheus:latest
+                        
+                        echo "🚀 Démarrage Grafana..."
+                        docker run -d \
+                          --name monitoring-grafana \
+                          -p 3030:3000 \
+                          -e GF_SECURITY_ADMIN_PASSWORD=admin \
+                          --restart unless-stopped \
+                          grafana/grafana:latest
                         
                         echo "✅ Conteneurs monitoring :"
                         docker ps | grep -E "prometheus|grafana"
@@ -179,8 +162,8 @@ EOF
                         
                         echo ""
                         echo "📊 Vérification finale :"
-                        curl -s -o /dev/null -w "Prometheus (9090): %{http_code}\n" http://localhost:9090 || echo "Prometheus: KO"
-                        curl -s -o /dev/null -w "Grafana (3030): %{http_code}\n" http://localhost:3030 || echo "Grafana: KO"
+                        curl -s -o /dev/null -w "Prometheus (9090): %{http_code}\n" http://localhost:9090 || echo "Prometheus: ⚠️"
+                        curl -s -o /dev/null -w "Grafana (3030): %{http_code}\n" http://localhost:3030 || echo "Grafana: ⚠️"
                     '''
                 }
             }
@@ -193,12 +176,12 @@ EOF
                         echo ""
                         echo "🎉 RÉSULTAT FINAL :"
                         echo "==================="
-                        docker ps --format "table {{.Names}}\t{{.Ports}}"
+                        docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
                         echo ""
-                        echo "Backend:  http://localhost:8000"
-                        echo "Frontend: http://localhost:3000" 
-                        echo "Prometheus: http://localhost:9090"
-                        echo "Grafana: http://localhost:3030 (admin/admin)"
+                        echo "✅ Backend:  http://localhost:8000"
+                        echo "✅ Frontend: http://localhost:3000"
+                        echo "✅ Prometheus: http://localhost:9090"
+                        echo "✅ Grafana: http://localhost:3030 (admin/admin)"
                     '''
                 }
             }
