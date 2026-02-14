@@ -54,7 +54,7 @@ pipeline {
                         # Créer le dossier playbooks s'il n'existe pas
                         mkdir -p ansible/playbooks
                         
-                        # Créer le playbook s'il n'existe pas
+                        # Créer le playbook avec échappement des doubles accolades
                         cat > ansible/playbooks/deploy_blog.yml << 'EOF'
 ---
 - name: Déployer l'application blog
@@ -62,38 +62,43 @@ pipeline {
   connection: docker
   tasks:
     - name: Vérifier que l'image backend existe
-      command: "docker images faso01/blog-backend:latest --format 'table {{.Repository}}'"
+      shell: |
+        docker images faso01/blog-backend:latest --format 'table {% raw %}{{.Repository}}{% endraw %}'
       register: backend_image
+      ignore_errors: yes
     
     - name: Lancer le conteneur backend
-      command: >
-        docker run -d
-        --name blog-backend
-        -p 8000:8000
-        --restart unless-stopped
-        faso01/blog-backend:latest
-      when: "'faso01/blog-backend' in backend_image.stdout"
+      shell: |
+        docker run -d \
+          --name blog-backend \
+          -p 8000:8000 \
+          --restart unless-stopped \
+          faso01/blog-backend:latest
+      when: backend_image.stdout is search("faso01/blog-backend")
       ignore_errors: yes
     
     - name: Vérifier que l'image frontend existe
-      command: "docker images faso01/blog-frontend:latest --format 'table {{.Repository}}'"
+      shell: |
+        docker images faso01/blog-frontend:latest --format 'table {% raw %}{{.Repository}}{% endraw %}'
       register: frontend_image
+      ignore_errors: yes
     
     - name: Lancer le conteneur frontend
-      command: >
-        docker run -d
-        --name blog-frontend
-        -p 3000:80
-        --restart unless-stopped
-        faso01/blog-frontend:latest
-      when: "'faso01/blog-frontend' in frontend_image.stdout"
+      shell: |
+        docker run -d \
+          --name blog-frontend \
+          -p 3000:80 \
+          --restart unless-stopped \
+          faso01/blog-frontend:latest
+      when: frontend_image.stdout is search("faso01/blog-frontend")
       ignore_errors: yes
     
     - name: Vérifier les conteneurs
-      command: docker ps
+      shell: docker ps
       register: docker_ps
     
-    - debug:
+    - name: Afficher les conteneurs
+      debug:
         var: docker_ps.stdout_lines
 EOF
                         
@@ -101,7 +106,7 @@ EOF
                         cat ansible/inventory/hosts.ini
                         
                         echo "🚀 Exécution du playbook..."
-                        ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml
+                        ansible-playbook -i ansible/inventory/hosts.ini ansible/playbooks/deploy_blog.yml -v
                     '''
                 }
             }
@@ -189,9 +194,14 @@ EOF
                         
                         echo ""
                         echo "📊 Monitoring :"
-                        curl -s http://localhost:9090/graph || echo "Prometheus: http://localhost:9090"
+                        echo "- Prometheus: http://localhost:9090"
+                        echo "- Grafana: http://localhost:3000 (admin/admin)"
+                        
+                        # Test des endpoints
                         echo ""
-                        echo "📈 Grafana: http://localhost:3000 (admin/admin)"
+                        echo "Tests des endpoints :"
+                        curl -s -o /dev/null -w "Backend: %{http_code}\n" http://localhost:8000 || echo "Backend: non accessible"
+                        curl -s -o /dev/null -w "Frontend: %{http_code}\n" http://localhost:3000 || echo "Frontend: non accessible"
                     '''
                 }
             }
@@ -205,6 +215,10 @@ EOF
         }
         success {
             echo "🎉 SUCCÈS ! Tous les services sont déployés !"
+            echo "   - Frontend: http://localhost:3000"
+            echo "   - Backend: http://localhost:8000"
+            echo "   - Prometheus: http://localhost:9090"
+            echo "   - Grafana: http://localhost:3000 (admin/admin)"
         }
         failure {
             echo "❌ ÉCHEC ! Vérifiez les logs."
