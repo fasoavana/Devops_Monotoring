@@ -6,6 +6,12 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  - job_name: 'blog-backend'
+  - job_name: 'node'
     static_configs:
-      - targets: ['172.17.0.2:5000']
+      - targets: ['node-exporter:9100']
+
+  - job_name: 'mysql'
+    static_configs:
+      - targets: ['172.17.0.1:9104']  # L'IP du host
+        labels:
+          instance: 'mysql-blog'
